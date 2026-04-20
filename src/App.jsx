@@ -92,7 +92,7 @@ const API_BASE = "https://api.aistudiogtet.com";
 async function backendPost(endpoint, body, isForm = false) {
   const r = await fetch(`${API_BASE}${endpoint}`, {
     method: "POST",
-    headers: isForm ? {} : { "Content-Type": "application/json", "x-api-key": "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, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: isForm ? {} : { "Content-Type": "application/json", "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
     body: isForm ? body : JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`Backend error ${r.status}`);
