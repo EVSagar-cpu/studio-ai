@@ -92,7 +92,7 @@ const API_BASE = "https://api.aistudiogtet.com";
 async function backendPost(endpoint, body, isForm = false) {
   const r = await fetch(`${API_BASE}${endpoint}`, {
     method: "POST",
-    headers: isForm ? {} : { "Content-Type": "application/json" },
+    headers: isForm ? {} : { "Content-Type": "application/json", "x-api-key": "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, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
     body: isForm ? body : JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`Backend error ${r.status}`);
@@ -114,7 +114,7 @@ async function pollJob(jid, onTick, maxSec = 300) {
 async function claudeCall(prompt, systemMsg) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-api-key": "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, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1500,
