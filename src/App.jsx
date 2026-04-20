@@ -1466,7 +1466,9 @@ function Asset3DView({ T, addToast }) {
       setPipeline({ status: { render:"done", audio:"done", merge:"done", save:"done" } });
       setOutputName(outputFile);
       setSavedAssets(a => [{ id: Date.now(), name: outputFile, template: template.label, topic: topicName, subtopic: subtopicName, grade, subject: activeSubject }, ...a]);
-      addToast("Render complete! Go to Output Library to download.", "success");
+      addToast("Render complete! File saved to server.", "success");
+      setOutputUrl(`https://api.aistudiogtet.com/files/${outputFile}`);
+      setOutputName(outputFile);
     } catch (e) {
       setPipeline({ status: { render:"error" } });
       addToast("Render failed — check backend logs", "error");
