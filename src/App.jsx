@@ -114,7 +114,7 @@ async function pollJob(jid, onTick, maxSec = 300) {
 async function claudeCall(prompt, systemMsg) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1500,
@@ -1466,9 +1466,7 @@ function Asset3DView({ T, addToast }) {
       setPipeline({ status: { render:"done", audio:"done", merge:"done", save:"done" } });
       setOutputName(outputFile);
       setSavedAssets(a => [{ id: Date.now(), name: outputFile, template: template.label, topic: topicName, subtopic: subtopicName, grade, subject: activeSubject }, ...a]);
-      addToast("Render complete! File saved to server.", "success");
-      setOutputUrl(`https://api.aistudiogtet.com/files/${outputFile}`);
-      setOutputName(outputFile);
+      addToast("Render complete! Go to Output Library to download.", "success");
     } catch (e) {
       setPipeline({ status: { render:"error" } });
       addToast("Render failed — check backend logs", "error");
