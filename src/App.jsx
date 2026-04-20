@@ -92,7 +92,7 @@ const API_BASE = "https://api.aistudiogtet.com";
 async function backendPost(endpoint, body, isForm = false) {
   const r = await fetch(`${API_BASE}${endpoint}`, {
     method: "POST",
-    headers: isForm ? {} : { "Content-Type": "application/json", "x-api-key": "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", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true", "x-api-key": "YOUR-KEY-HERE", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: isForm ? {} : { "Content-Type": "application/json" },
     body: isForm ? body : JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`Backend error ${r.status}`);
@@ -114,7 +114,7 @@ async function pollJob(jid, onTick, maxSec = 300) {
 async function claudeCall(prompt, systemMsg) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": "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", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true", "x-api-key": "YOUR-KEY-HERE", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1500,
@@ -1418,6 +1418,10 @@ function Asset3DView({ T, addToast }) {
   const [prompt, setPrompt]                 = useState("");
   const [grade, setGrade]                   = useState("10");
   const [quality, setQuality]               = useState("-ql");
+  const [topicName, setTopicName]           = useState("");
+  const [subtopicName, setSubtopicName]     = useState("");
+  const [assetName, setAssetName]           = useState("");
+  const [aiDescription, setAiDescription]   = useState("");
   const [manimCode, setManimCode]           = useState("");
   const [generatingCode, setGeneratingCode] = useState(false);
   const [pipeline, setPipeline]             = useState({ status: {} });
@@ -1429,30 +1433,34 @@ function Asset3DView({ T, addToast }) {
 
   async function generateCode() {
     if (!template) return addToast("Select a template first", "error");
-    setGeneratingCode(true); setManimCode(""); setOutputUrl(null);
+    if (!assetName) return addToast("Enter an asset name first", "error");
+    setGeneratingCode(true); setManimCode(""); setAiDescription(""); setOutputUrl(null);
     try {
       const res = await claudeCall(
-        `Write Manim Community Edition Python code for an NCERT educational animation.\n\nTemplate: ${template.label}\nSubject: ${activeSubject}\nGrade: ${grade}\nDescription: ${template.desc}\nExtra instructions: ${prompt || "None"}\n\nRequirements:\n- Use: from manim import *\n- Class name: ${template.id.replace(/_/g,"").replace(/^\w/,c=>c.toUpperCase())}Scene\n- Duration: 30–60 seconds\n- Include all text labels in clear English\n- Use NCERT-accurate content\n- Animate step by step — don't show everything at once\n- Use appropriate colors (NCERT textbook style)\n\nReturn ONLY the complete Python code, no explanation.`,
-        "You are a Manim expert building NCERT K-12 educational animations. Return ONLY working Python code."
+        `Write Manim Community Edition Python code for an NCERT educational animation.\n\nTemplate: ${template.label}\nSubject: ${activeSubject}\nGrade: ${grade}\nTopic: ${topicName || template.label}\nSubtopic: ${subtopicName || template.desc}\nAsset Name: ${assetName}\nDescription: ${template.desc}\nExtra instructions: ${prompt || "None"}\n\nRequirements:\n- Use: from manim import *\n- Class name: ${template.id.replace(/_/g,"").replace(/^\w/,c=>c.toUpperCase())}Scene\n- Duration: 30–60 seconds\n- Include all text labels in clear English\n- Use NCERT-accurate content\n- Animate step by step — don't show everything at once\n- Use appropriate colors (NCERT textbook style)\n\nFirst write a one-paragraph description of what this animation will show, starting with "DESCRIPTION:"\nThen write the complete Python code starting with "CODE:"\nReturn ONLY these two sections.`,
+        "You are a Manim expert building NCERT K-12 educational animations."
       );
-      setManimCode(res.replace(/```python|```/g,"").trim());
-      addToast("Manim code generated — ready to render", "success");
+      const descMatch = res.match(/DESCRIPTION:([\s\S]*?)CODE:/);
+      const codeMatch = res.match(/CODE:([\s\S]*)/);
+      setAiDescription(descMatch ? descMatch[1].trim() : "Animation ready to render.");
+      setManimCode((codeMatch ? codeMatch[1] : res).replace(/```python|```/g,"").trim());
+      addToast("Manim code generated — review and click Render", "success");
     } catch { addToast("Claude API error", "error"); }
     finally { setGeneratingCode(false); }
   }
 
   function runPipeline() {
     if (!manimCode) return addToast("Generate code first", "error");
+    const finalName = (assetName || template.id).replace(/\s+/g,"_").toLowerCase();
     const stages = ["render","audio","merge","save"];
-    const labels = { render:"Manim render", audio:"Silence/TTS pad", merge:"FFmpeg finalise", save:"Save to output" };
     let i = 0;
     setPipeline({ status: { render:"running" } });
     const tick = () => {
       if (i >= stages.length) {
-        const name = `${template.id}_gr${grade}.mp4`;
-        setOutputUrl("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"); // demo
+        const name = `${finalName}_gr${grade}.mp4`;
+        setOutputUrl("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4");
         setOutputName(name);
-        setSavedAssets(a => [{ id: Date.now(), name, template: template.label, grade, subject: activeSubject, url: "#" }, ...a]);
+        setSavedAssets(a => [{ id: Date.now(), name, template: template.label, topic: topicName, subtopic: subtopicName, grade, subject: activeSubject, url: "#" }, ...a]);
         setPipeline({ status: Object.fromEntries(stages.map(s=>[s,"done"])) });
         addToast(`Saved: ./studio_output/${name}`, "success");
         return;
@@ -1529,42 +1537,76 @@ function Asset3DView({ T, addToast }) {
             </div>
           </Card>
 
-          {/* Prompt block */}
+          {/* Topic / Subtopic / Asset Name fields */}
           <Card T={T}>
-            <Label T={T}>Describe what you want  <span style={{fontWeight:400, textTransform:"none", fontSize:11, color:T.t3}}> — add specific details for Claude to customise the animation</span></Label>
-            <Inp value={prompt} onChange={e => setPrompt(e.target.value)} T={T} rows={3}
-              placeholder={template
-                ? `e.g. "Show ${template.label} step by step for Grade ${grade} NCERT. Highlight the key parts. Use bright colors. Add Hindi labels alongside English."`
-                : "Select a template above first, then describe any specific requirements..."
-              } />
-            <div style={{ display:"flex", gap:8, marginTop:10, alignItems:"center" }}>
-              <Btn T={T} variant="primary" Icon={Sparkles} loading={generatingCode} onClick={generateCode} disabled={!template}>
-                {generatingCode ? "Generating Manim Code…" : "Generate Manim Code"}
-              </Btn>
-              {manimCode && <span style={{ fontSize:11, color:T.g, display:"flex", alignItems:"center", gap:4 }}><Check size={12}/>Code ready</span>}
+            <Label T={T}>Asset Details</Label>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
+              <div>
+                <Label T={T}>Topic Name</Label>
+                <Inp value={topicName} onChange={e => setTopicName(e.target.value)} T={T} placeholder="e.g. Light & Optics" />
+              </div>
+              <div>
+                <Label T={T}>Subtopic Name</Label>
+                <Inp value={subtopicName} onChange={e => setSubtopicName(e.target.value)} T={T} placeholder="e.g. Reflection of Light" />
+              </div>
+              <div>
+                <Label T={T}>Asset Name *</Label>
+                <Inp value={assetName} onChange={e => setAssetName(e.target.value)} T={T} placeholder="e.g. ray_optics_reflection" />
+              </div>
             </div>
           </Card>
 
-          {/* Generated code viewer */}
+          {/* Prompt block */}
+          <Card T={T}>
+            <Label T={T}>Additional Instructions <span style={{fontWeight:400, textTransform:"none", fontSize:11, color:T.t3}}> — optional extra details for Claude</span></Label>
+            <Inp value={prompt} onChange={e => setPrompt(e.target.value)} T={T} rows={3}
+              placeholder={template
+                ? `e.g. "Show ${template.label} step by step for Grade ${grade} NCERT. Highlight the key parts. Use bright colors."`
+                : "Select a template above first..."
+              } />
+            <div style={{ display:"flex", gap:8, marginTop:10, alignItems:"center" }}>
+              <Btn T={T} variant="primary" Icon={Sparkles} loading={generatingCode} onClick={generateCode} disabled={!template}>
+                {generatingCode ? "Generating…" : "Generate Manim Code"}
+              </Btn>
+              {manimCode && <span style={{ fontSize:11, color:T.g, display:"flex", alignItems:"center", gap:4 }}><Check size={12}/>Code ready — review below then click Render</span>}
+            </div>
+          </Card>
+
+          {/* AI Output — Description + Code */}
           {(generatingCode || manimCode) && (
-            <Card T={T}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                  <Terminal size={13} color={T.ac} />
-                  <Label T={T}>Generated Manim Code</Label>
-                </div>
-                <div style={{ display:"flex", gap:6 }}>
-                  <Btn T={T} variant="ghost" size="sm" Icon={Copy} onClick={() => navigator.clipboard.writeText(manimCode)}>Copy</Btn>
-                  <Btn T={T} variant="ghost" size="sm" Icon={Download}
-                    onClick={() => { const a=document.createElement("a"); a.href="data:text/plain,"+encodeURIComponent(manimCode); a.download=`${template?.id||"scene"}.py`; a.click(); }}>
-                    Download .py
-                  </Btn>
-                </div>
+            <Card T={T} style={{ border: `1px solid ${T.ac}22` }}>
+              <div style={{ fontSize:12, fontWeight:600, color:T.ac, marginBottom:12, display:"flex", alignItems:"center", gap:6 }}>
+                <Sparkles size={13} /> AI Generation Output
               </div>
-              {generatingCode
-                ? <div style={{ textAlign:"center", padding:"32px 0" }}><Spin size={20} color={T.ac}/><div style={{ fontSize:12,color:T.t3,marginTop:8 }}>Claude is writing Manim code…</div></div>
-                : <div style={{ background:"#0a0a0c", borderRadius:8, padding:"12px 14px", fontFamily:"monospace", fontSize:11, color:"#a5b4fc", whiteSpace:"pre-wrap", maxHeight:260, overflowY:"auto", lineHeight:1.65 }}>{manimCode}</div>
-              }
+
+              {/* Description */}
+              {(generatingCode || aiDescription) && (
+                <div style={{ marginBottom:14 }}>
+                  <Label T={T}>Animation Description</Label>
+                  {generatingCode && !aiDescription
+                    ? <div style={{ padding:"12px", background:T.s2, borderRadius:7, fontSize:12, color:T.t3 }}>Generating description...</div>
+                    : <div style={{ padding:"12px", background:T.s2, borderRadius:7, fontSize:12, color:T.t2, lineHeight:1.7 }}>{aiDescription}</div>
+                  }
+                </div>
+              )}
+
+              {/* Manim Code */}
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                  <Label T={T}>Manim Python Code</Label>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <Btn T={T} variant="ghost" size="sm" Icon={Copy} onClick={() => navigator.clipboard.writeText(manimCode)}>Copy</Btn>
+                    <Btn T={T} variant="ghost" size="sm" Icon={Download}
+                      onClick={() => { const a=document.createElement("a"); a.href="data:text/plain,"+encodeURIComponent(manimCode); a.download=`${assetName||template?.id||"scene"}.py`; a.click(); }}>
+                      Download .py
+                    </Btn>
+                  </div>
+                </div>
+                {generatingCode
+                  ? <div style={{ textAlign:"center", padding:"32px 0" }}><Spin size={20} color={T.ac}/><div style={{ fontSize:12,color:T.t3,marginTop:8 }}>Claude is writing Manim code…</div></div>
+                  : <div style={{ background:"#0a0a0c", borderRadius:8, padding:"12px 14px", fontFamily:"monospace", fontSize:11, color:"#a5b4fc", whiteSpace:"pre-wrap", maxHeight:260, overflowY:"auto", lineHeight:1.65 }}>{manimCode}</div>
+                }
+              </div>
             </Card>
           )}
         </div>
@@ -1651,12 +1693,13 @@ function Asset3DView({ T, addToast }) {
             <Card T={T}>
               <Label T={T}>Generated This Session</Label>
               {savedAssets.map(a => (
-                <div key={a.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:`1px solid ${T.b}`, fontSize:11 }}>
+                <div key={a.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${T.b}`, fontSize:11 }}>
                   <div>
-                    <div style={{ fontWeight:500, color:T.t }}>{a.template}</div>
-                    <div style={{ color:T.t3 }}>{a.subject} · Grade {a.grade}</div>
+                    <div style={{ fontWeight:600, color:T.t }}>{a.name}</div>
+                    <div style={{ color:T.t2, marginTop:1 }}>{a.template} · {a.topic || a.subject} {a.subtopic ? `· ${a.subtopic}` : ""}</div>
+                    <div style={{ color:T.t3 }}>Grade {a.grade}</div>
                   </div>
-                  <code style={{ fontSize:10, color:T.g }}>.mp4</code>
+                  <code style={{ fontSize:10, color:T.g }}>✅ .mp4</code>
                 </div>
               ))}
             </Card>
@@ -2071,7 +2114,6 @@ export default function App() {
   function updateAsset(id, patch) { setAssets(a => a.map(x => x.id === id ? { ...x, ...patch } : x)); }
 
   const views = { dashboard: DashboardView, upload: UploadView, review: ReviewView, trim: TrimView, scene: SceneView, asset3d: Asset3DView, output: OutputView };
-
   const View = views[view];
 
   if (!authed) return <LoginScreen onLogin={() => setAuthed(true)} />;
