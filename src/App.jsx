@@ -1455,11 +1455,7 @@ function Asset3DView({ T, addToast }) {
     const outputFile = `${finalName}_gr${grade}.mp4`;
     setPipeline({ status: { render:"running" } });
     try {
-      const fd = new FormData();
-      fd.append("code", manimCode);
-      fd.append("filename", outputFile);
-      fd.append("quality", quality);
-      const res = await backendPost("/api/render-manim", fd, true);
+      const res = await backendPost("/api/render-manim", { code: manimCode, filename: outputFile, quality: quality });
       setPipeline({ status: { render:"done", audio:"done", merge:"done", save:"done" } });
       setOutputName(outputFile);
       setSavedAssets(a => [{ id: Date.now(), name: outputFile, template: template.label, topic: topicName, subtopic: subtopicName, grade, subject: activeSubject }, ...a]);
