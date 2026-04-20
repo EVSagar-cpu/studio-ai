@@ -1449,27 +1449,25 @@ function Asset3DView({ T, addToast }) {
     finally { setGeneratingCode(false); }
   }
 
-  function runPipeline() {
+  async function runPipeline() {
     if (!manimCode) return addToast("Generate code first", "error");
     const finalName = (assetName || template.id).replace(/\s+/g,"_").toLowerCase();
-    const stages = ["render","audio","merge","save"];
-    let i = 0;
+    const outputFile = `${finalName}_gr${grade}.mp4`;
     setPipeline({ status: { render:"running" } });
-    const tick = () => {
-      if (i >= stages.length) {
-        const name = `${finalName}_gr${grade}.mp4`;
-        setOutputUrl("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4");
-        setOutputName(name);
-        setSavedAssets(a => [{ id: Date.now(), name, template: template.label, topic: topicName, subtopic: subtopicName, grade, subject: activeSubject, url: "#" }, ...a]);
-        setPipeline({ status: Object.fromEntries(stages.map(s=>[s,"done"])) });
-        addToast(`Saved: ./studio_output/${name}`, "success");
-        return;
-      }
-      setPipeline(p => ({ status: { ...p.status, [stages[i-1]]:"done", [stages[i]]:"running" } }));
-      i++;
-      setTimeout(tick, 2000);
-    };
-    setTimeout(tick, 2000);
+    try {
+      const fd = new FormData();
+      fd.append("code", manimCode);
+      fd.append("filename", outputFile);
+      fd.append("quality", quality);
+      const res = await backendPost("/api/render-manim", fd, true);
+      setPipeline({ status: { render:"done", audio:"done", merge:"done", save:"done" } });
+      setOutputName(outputFile);
+      setSavedAssets(a => [{ id: Date.now(), name: outputFile, template: template.label, topic: topicName, subtopic: subtopicName, grade, subject: activeSubject }, ...a]);
+      addToast("Rendered! Go to Output Library to download.", "success");
+    } catch {
+      setPipeline({ status: { render:"error" } });
+      addToast("Render failed — check backend logs", "error");
+    }
   }
 
   const isRunning = Object.values(pipeline.status).includes("running");
