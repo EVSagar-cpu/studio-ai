@@ -87,7 +87,7 @@ const MOCK_ASSETS = [
 ];
 
 /* ═══ API HELPERS ════════════════════════════════════════════════════════ */
-const API_BASE = "http://178.128.24.90:8000";
+const API_BASE = "https://api.aistudiogtet.com";
 
 async function backendPost(endpoint, body, isForm = false) {
   const r = await fetch(`${API_BASE}${endpoint}`, {
@@ -1641,7 +1641,7 @@ function Asset3DView({ T, addToast }) {
               </div>
               <div style={{ display:"flex", gap:6, marginTop:8 }}>
                 <Btn T={T} variant="primary" size="sm" Icon={Download}>Download MP4</Btn>
-                <Btn T={T} variant="secondary" size="sm" Icon={Copy} onClick={() => navigator.clipboard.writeText(`http://178.128.24.90:8000/files/${outputName}`)}>Copy URL</Btn>
+                <Btn T={T} variant="secondary" size="sm" Icon={Copy} onClick={() => navigator.clipboard.writeText(`https://api.aistudiogtet.com/files/${outputName}`)}>Copy URL</Btn>
               </div>
             </Card>
           )}
