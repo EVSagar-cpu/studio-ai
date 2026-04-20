@@ -2035,7 +2035,7 @@ export default function App() {
   const [backendOk, setBackendOk] = useState(false);
   const T = mode === "dark" ? DARK : LIGHT;
 
-  if (!authed) return <LoginScreen onLogin={() => setAuthed(true)} />;
+  // auth check moved to return
 
   // Global styles
   useEffect(() => {
