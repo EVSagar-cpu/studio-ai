@@ -114,7 +114,7 @@ async function pollJob(jid, onTick, maxSec = 300) {
 async function claudeCall(prompt, systemMsg) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1500,
@@ -1456,11 +1456,18 @@ function Asset3DView({ T, addToast }) {
     setPipeline({ status: { render:"running" } });
     try {
       const res = await backendPost("/api/render-manim", { code: manimCode, filename: outputFile, quality: quality });
+      // Poll for job completion if backend returns job_id
+      if (res.job_id) {
+        setPipeline({ status: { render:"running", audio:"running" } });
+        await pollJob(res.job_id, (j) => {
+          if (j.status === "running") setPipeline({ status: { render:"done", audio:"running", merge:"running" } });
+        });
+      }
       setPipeline({ status: { render:"done", audio:"done", merge:"done", save:"done" } });
       setOutputName(outputFile);
       setSavedAssets(a => [{ id: Date.now(), name: outputFile, template: template.label, topic: topicName, subtopic: subtopicName, grade, subject: activeSubject }, ...a]);
-      addToast("Rendered! Go to Output Library to download.", "success");
-    } catch {
+      addToast("Render complete! Go to Output Library to download.", "success");
+    } catch (e) {
       setPipeline({ status: { render:"error" } });
       addToast("Render failed — check backend logs", "error");
     }
