@@ -182,9 +182,9 @@ function Btn({ children, onClick, variant = "primary", size = "md", disabled, lo
   );
 }
 
-function Card({ children, T, style: sx = {} }) {
+function Card({ children, T, style: sx = {}, onClick }) {
   return (
-    <div style={{ background: T.s, border: `1px solid ${T.b}`, borderRadius: 10, padding: 16, ...sx }}>
+    <div onClick={onClick} style={{ background: T.s, border: `1px solid ${T.b}`, borderRadius: 10, padding: 16, ...sx }}>
       {children}
     </div>
   );
