@@ -112,16 +112,12 @@ async function pollJob(jid, onTick, maxSec = 300) {
 }
 
 async function claudeCall(prompt, systemMsg) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await fetch(`${API_BASE}/api/claude`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1500,
-      system: systemMsg || "You are an expert K-12 educational content creator for Indian NCERT/CBSE curriculum. Be concise and precise.",
-      messages: [{ role: "user", content: prompt }]
-    })
+    body: JSON.stringify({ prompt, systemMsg }),
   });
+  if (!r.ok) throw new Error(`Claude proxy error ${r.status}`);
   const d = await r.json();
   return d.content?.[0]?.text || "";
 }
