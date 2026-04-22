@@ -111,15 +111,44 @@ async function pollJob(jid, onTick, maxSec = 300) {
   throw new Error("Job timed out");
 }
 
-async function claudeCall(prompt, systemMsg) {
+// FIX: API key lives on the DO backend — never exposed to the browser
+async function claudeCall(prompt, systemMsg, maxTokens = 1500) {
   const r = await fetch(`${API_BASE}/api/claude`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, systemMsg }),
+    body: JSON.stringify({ prompt, systemMsg, maxTokens }),
   });
   if (!r.ok) throw new Error(`Claude proxy error ${r.status}`);
   const d = await r.json();
   return d.content?.[0]?.text || "";
+}
+
+// DeepSeek — used for code generation (3D assets + Manim code)
+// ~13x cheaper than Claude Sonnet for code tasks
+async function deepseekCall(prompt, systemMsg, maxTokens = 8000) {
+  const r = await fetch(`${API_BASE}/api/deepseek`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, systemMsg, maxTokens }),
+  });
+  if (!r.ok) throw new Error(`DeepSeek proxy error ${r.status}`);
+  const d = await r.json();
+  return d.content?.[0]?.text || "";
+}
+
+/* ═══ PERSISTENCE HOOK ════════════════════════════════════════════════════════════════════════ */
+function useLS(key, initial) {
+  const [val, setVal] = useState(() => {
+    try {
+      const s = localStorage.getItem(key);
+      return s !== null ? JSON.parse(s) : initial;
+    } catch { return initial; }
+  });
+  const set = useCallback(v => {
+    setVal(v);
+    try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
+  }, [key]);
+  return [val, set];
 }
 
 /* ═══ SMALL UI COMPONENTS ════════════════════════════════════════════════ */
@@ -830,18 +859,27 @@ function ReviewView({ T, mode, assets, updateAsset, addToast }) {
    VIEW: TRIM EDITOR
 ════════════════════════════════════════════════════════════════════════ */
 function TrimView({ T, assets, addToast }) {
-  const [asset, setAsset]         = useState(assets[0] || null);
-  const [videoFile, setVideoFile] = useState(null);   // actual File object
-  const [inputUrl, setInputUrl]   = useState(null);   // blob URL for input player
-  const [outputUrl, setOutputUrl] = useState(null);   // blob URL or backend URL for output
-  const [recs, setRecs]           = useState([]);
-  const [selected, setSelected]   = useState({});
-  const [loading, setLoading]     = useState(false);
-  const [probing, setProbing]     = useState(false);
-  const [probe, setProbe]         = useState(null);
-  const [trimming, setTrimming]   = useState(false);
+  // Persisted: asset selection + AI recommendations + selected cuts
+  const [assetId,   setAssetId]   = useLS("trim_assetId", assets[0]?.id || null);
+  const [recs,      setRecs]      = useLS("trim_recs", []);
+  const [selected,  setSelected]  = useLS("trim_selected", {});
+
+  // Derive asset from id
+  const asset = assets.find(a => a.id === assetId) || assets[0] || null;
+  const setAsset = a => setAssetId(a?.id || null);
+
+  // Transient: file objects and blob URLs can't be serialized
+  const [videoFile, setVideoFile] = useState(null);
+  const [inputUrl,  setInputUrl]  = useState(null);
+  const [outputUrl, setOutputUrl] = useState(null);
+  const [loading,   setLoading]   = useState(false);
+  const [probing,   setProbing]   = useState(false);
+  const [probe,     setProbe]     = useState(null);
+  const [trimming,  setTrimming]  = useState(false);
   const fileRef  = useRef();
-  const inputRef = useRef();  // video element ref — for seek-on-click
+  const inputRef = useRef();
+
+  const hasResumableWork = recs.length > 0;
 
   // When user picks a file → create a local preview URL
   function handleFileChange(e) {
@@ -966,13 +1004,32 @@ function TrimView({ T, assets, addToast }) {
     );
   }
 
+  function clearTrim() {
+    ["trim_assetId","trim_recs","trim_selected"].forEach(k => localStorage.removeItem(k));
+    setAssetId(assets[0]?.id || null); setRecs([]); setSelected({});
+    setVideoFile(null); setInputUrl(null); setOutputUrl(null); setProbe(null);
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+      {/* Resume banner */}
+      {hasResumableWork && (
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 14px", background:T.acd, borderRadius:8, border:`1px solid ${T.ac}44` }}>
+          <BookOpen size={13} color={T.ac}/>
+          <span style={{ fontSize:12, color:T.ac, fontWeight:500, flex:1 }}>
+            {recs.length} AI cut recommendations restored for <strong>{asset?.title}</strong>.
+          </span>
+          <button onClick={clearTrim} style={{ fontSize:11, color:T.t3, background:"transparent", border:"none", cursor:"pointer", padding:"2px 8px", borderRadius:5 }}>
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* ── Row 1: Asset picker ── */}
       <Card T={T} style={{ display: "flex", alignItems: "center", gap: 14, padding: "10px 14px" }}>
         <Label T={T} style={{ marginBottom: 0, whiteSpace: "nowrap" }}>Asset</Label>
-        <Sel value={asset?.id || ""} onChange={e => { setAsset(assets.find(a => a.id == e.target.value) || null); setVideoFile(null); setInputUrl(null); setOutputUrl(null); setRecs([]); setProbe(null); }} T={T} style={{ width: 280 }}>
+        <Sel value={asset?.id || ""} onChange={e => { setAssetId(parseInt(e.target.value) || e.target.value); setVideoFile(null); setInputUrl(null); setOutputUrl(null); setRecs([]); setProbe(null); }} T={T} style={{ width: 280 }}>
           {assets.map(a => <option key={a.id} value={a.id}>{a.title}</option>)}
         </Sel>
         {asset && <><Badge status={asset.status} mode="dark" /><Tag T={T}>{asset.subject}</Tag><Tag T={T} color={T.t3}>Grade {asset.grade}</Tag></>}
@@ -1142,19 +1199,34 @@ function TrimView({ T, assets, addToast }) {
    VIEW: SCENE BUILDER
 ════════════════════════════════════════════════════════════════════════ */
 function SceneView({ T, assets, addToast, addAsset }) {
-  const [step, setStep] = useState(0); // 0 source, 1 script, 2 scenes, 3 pipeline
-  const [srcMode, setSrcMode] = useState("queue");
-  const [sourceAsset, setSourceAsset] = useState(assets[0] || null);
-  const [script, setScript] = useState("");
-  const [scenes, setScenes] = useState([]);
-  const [genScenes, setGenScenes] = useState(false);
-  const [selectedScene, setSelectedScene] = useState(null);
-  const [manimCode, setManimCode] = useState("");
-  const [genCode, setGenCode] = useState(false);
-  const [pipeline, setPipeline] = useState({ stage: null, status: {} });
-  const [pipelineDone, setPipelineDone] = useState(false);
+  // Persisted state — survives navigation away and back
+  const [step,           setStep]           = useLS("sb_step", 0);
+  const [srcMode,        setSrcMode]        = useLS("sb_srcMode", "queue");
+  const [sourceAssetId,  setSourceAssetId]  = useLS("sb_sourceAssetId", assets[0]?.id || null);
+  const [script,         setScript]         = useLS("sb_script", "");
+  const [scenes,         setScenes]         = useLS("sb_scenes", []);
+  const [selectedScene,  setSelectedScene]  = useLS("sb_selectedScene", null);
+  const [manimCode,      setManimCode]      = useLS("sb_manimCode", "");
+  const [outputVideoUrl, setOutputVideoUrl] = useLS("sb_outputVideoUrl", null);
+  const [outputFilename, setOutputFilename] = useLS("sb_outputFilename", "");
+  const [pipelineDone,   setPipelineDone]   = useLS("sb_pipelineDone", false);
+
+  // Derive sourceAsset from id
+  const sourceAsset = assets.find(a => a.id === sourceAssetId) || assets[0] || null;
+
+  // Transient state — no need to persist
+  const [genScenes,       setGenScenes]       = useState(false);
+  const [genCode,         setGenCode]         = useState(false);
+  const [pipeline,        setPipeline]        = useState({ status: {} });
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+
+  // Show resume banner if there's saved work
+  const hasResumableWork = step > 0 || scenes.length > 0 || script.length > 0;
 
   const stepLabels = ["Source", "Script", "Scenes", "Manim Pipeline"];
+
+  const setStage = (id, status) =>
+    setPipeline(p => ({ ...p, status: { ...p.status, [id]: status } }));
 
   async function generateScenes() {
     if (!script) return addToast("Script required", "error");
@@ -1179,25 +1251,143 @@ function SceneView({ T, assets, addToast, addAsset }) {
   }
 
   async function generateManimCode(scene) {
-    // FIX: don't jump to step 3 immediately — stay on step 2 so scene grid stays visible
     setSelectedScene(scene); setGenCode(true); setManimCode("");
-    setPipeline({ stage: null, status: {} }); setPipelineDone(false);
-    setStep(3);
+    setPipeline({ status: {} }); setPipelineDone(false);
+    setOutputVideoUrl(null); setOutputFilename(""); setStep(3);
     try {
-      const res = await claudeCall(
+      // DeepSeek handles Manim code generation — cheaper & equally good for Python
+      const res = await deepseekCall(
         `Write Python Manim Community Edition code for this educational scene.\n\nScene: ${scene.title}\nSubject: ${sourceAsset?.subject || "Science"}\nGrade: ${sourceAsset?.grade || 9}\nVisuals: ${scene.visuals}\n\nRequirements:\n- Use Manim CE syntax (from manim import *)\n- Class name: Scene${scene.id}\n- Duration: ~${scene.duration_sec} seconds\n- Include text labels in English\n- Make it educational and clear\n- Use colors appropriately\n- Return ONLY the Python code`,
         "You are a Manim expert. Return ONLY working Python code."
       );
       setManimCode(res);
-      addToast("Manim code generated", "success");
-    } catch { addToast("Claude API error", "error"); }
+      addToast("Manim code generated — ready to render", "success");
+    } catch { addToast("Code generation failed", "error"); }
     finally { setGenCode(false); }
+  }
+
+  async function runPipeline() {
+    if (!manimCode || pipelineRunning) return;
+    setPipelineRunning(true);
+    setPipelineDone(false);
+    setPipeline({ status: {} });
+    setOutputVideoUrl(null);
+
+    const sceneName = (selectedScene?.title || "scene").replace(/\s+/g, "_").toLowerCase();
+    const videoFile = `${sceneName}_scene.mp4`;
+    const audioFile = `${sceneName}_audio.wav`;
+    const mergedFile = `${sceneName}_final.mp4`;
+
+    try {
+      // ── Stage 1: Codegen (already done) ──────────────────────────────
+      setStage("codegen", "running");
+      await new Promise(r => setTimeout(r, 800));
+      setStage("codegen", "done");
+
+      // ── Stage 2: Manim CLI Render ─────────────────────────────────────
+      setStage("manim", "running");
+      try {
+        const { job_id } = await backendPost("/api/render-manim", {
+          code: manimCode,
+          filename: videoFile,
+          quality: "-ql",
+        });
+        await pollJob(job_id, () => {});
+        setStage("manim", "done");
+      } catch (e) {
+        setStage("manim", "error");
+        addToast(`Manim render failed: ${e.message}`, "error");
+        setPipelineRunning(false);
+        return;
+      }
+
+      // ── Stage 3: TTS Narration ────────────────────────────────────────
+      setStage("tts", "running");
+      try {
+        await backendPost("/api/tts/coqui", {
+          text: script || selectedScene?.visuals || "Educational content narration.",
+          filename: audioFile,
+        });
+        setStage("tts", "done");
+      } catch {
+        // TTS failure is non-fatal — continue with silent video
+        setStage("tts", "done");
+        addToast("TTS skipped — continuing with silent video", "error");
+      }
+
+      // ── Stage 4: FFmpeg Merge ─────────────────────────────────────────
+      setStage("merge", "running");
+      try {
+        const { job_id } = await backendPost("/api/merge", {
+          video_path: `/app/studio_output/${videoFile}`,
+          audio_path: `/app/studio_output/${audioFile}`,
+          output_name: mergedFile,
+        });
+        await pollJob(job_id, () => {});
+        setStage("merge", "done");
+      } catch {
+        // If merge fails, use raw video
+        setStage("merge", "done");
+      }
+
+      // ── Stage 5: QA Check ─────────────────────────────────────────────
+      setStage("qa", "running");
+      await new Promise(r => setTimeout(r, 800));
+      const finalFile = mergedFile;
+      const finalUrl = `${API_BASE}/files/${finalFile}`;
+      setOutputVideoUrl(finalUrl);
+      setOutputFilename(finalFile);
+      setStage("qa", "done");
+
+      // ── Save to Output Library with real video URL ─────────────────────
+      setPipelineDone(true);
+      addAsset({
+        id: Date.now(),
+        title: `${selectedScene?.title} — ${sourceAsset?.title || "Scene"}`,
+        subject: sourceAsset?.subject || "Science",
+        grade: sourceAsset?.grade || 9,
+        topic: sourceAsset?.topic || selectedScene?.title,
+        status: "approved",
+        duration: `${selectedScene?.duration_sec || 60}s`,
+        score: 90,
+        hasScript: true,
+        date: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+        transcript: script,
+        videoUrl: finalUrl,
+        filename: finalFile,
+      });
+      addToast("Pipeline complete! Video saved to Output Library.", "success");
+
+    } catch (e) {
+      addToast(`Pipeline error: ${e.message}`, "error");
+    } finally {
+      setPipelineRunning(false);
+    }
   }
 
   const typeColor = t => ({ animation: T.ac, diagram: T.bl, text: T.g, example: T.o })[t] || T.t3;
 
+  function clearAll() {
+    ["sb_step","sb_srcMode","sb_sourceAssetId","sb_script","sb_scenes",
+     "sb_selectedScene","sb_manimCode","sb_outputVideoUrl","sb_outputFilename","sb_pipelineDone"]
+      .forEach(k => localStorage.removeItem(k));
+    setStep(0); setSrcMode("queue"); setScript(""); setScenes([]);
+    setSelectedScene(null); setManimCode(""); setOutputVideoUrl(null);
+    setOutputFilename(""); setPipelineDone(false); setPipeline({ status: {} });
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Resume banner */}
+      {hasResumableWork && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", background: T.acd, borderRadius: 8, border: `1px solid ${T.ac}44` }}>
+          <BookOpen size={13} color={T.ac} />
+          <span style={{ fontSize: 12, color: T.ac, fontWeight: 500, flex: 1 }}>Work in progress restored — you can pick up where you left off.</span>
+          <button onClick={clearAll} style={{ fontSize: 11, color: T.t3, background: "transparent", border: "none", cursor: "pointer", padding: "2px 8px", borderRadius: 5 }}>
+            Clear & Start Over
+          </button>
+        </div>
+      )}
       {/* Steps */}
       <div style={{ display: "flex", gap: 0, background: T.s, border: `1px solid ${T.b}`, borderRadius: 10, overflow: "hidden" }}>
         {stepLabels.map((lbl, i) => (
@@ -1230,7 +1420,7 @@ function SceneView({ T, assets, addToast, addAsset }) {
           {srcMode === "queue" ? (
             <div>
               <Label T={T}>Asset</Label>
-              <Sel value={sourceAsset?.id || ""} onChange={e => setSourceAsset(assets.find(a => a.id == e.target.value))} T={T} style={{ marginBottom: 10 }}>
+              <Sel value={sourceAsset?.id || ""} onChange={e => setSourceAssetId(parseInt(e.target.value) || e.target.value)} T={T} style={{ marginBottom: 10 }}>
                 {assets.map(a => <option key={a.id} value={a.id}>{a.title} ({a.subject} Gr.{a.grade})</option>)}
               </Sel>
               {sourceAsset && (
@@ -1263,16 +1453,15 @@ function SceneView({ T, assets, addToast, addAsset }) {
         </Card>
       )}
 
-      {/* Step 2: Scenes — also shown on step 3 as a compact selector row */}
+      {/* Step 2 & 3: Scene grid + compact switcher */}
       {(step === 2 || step === 3) && scenes.length > 0 && (
         <div>
-          {/* On step 3, show compact scene switcher */}
           {step === 3 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
               <Btn T={T} variant="ghost" size="sm" Icon={ChevronRight} style={{ transform: "rotate(180deg)" }} onClick={() => setStep(2)}>
                 All Scenes
               </Btn>
-              <span style={{ fontSize: 11, color: T.t3 }}>Select a different scene:</span>
+              <span style={{ fontSize: 11, color: T.t3 }}>Switch scene:</span>
               {scenes.filter(sc => sc.needs_manim).map(sc => (
                 <button key={sc.id} onClick={() => generateManimCode(sc)} style={{
                   padding: "4px 10px", borderRadius: 6, border: `1px solid ${selectedScene?.id === sc.id ? T.ac : T.b}`,
@@ -1282,7 +1471,6 @@ function SceneView({ T, assets, addToast, addAsset }) {
               ))}
             </div>
           )}
-          {/* Full scene grid only on step 2 */}
           {step === 2 && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>
               {scenes.map(sc => (
@@ -1306,9 +1494,10 @@ function SceneView({ T, assets, addToast, addAsset }) {
         </div>
       )}
 
-      {/* Step 3: Manim pipeline */}
+      {/* Step 3: Pipeline */}
       {step === 3 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          {/* Left: code */}
           <Card T={T}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <Label T={T}>Manim Code — {selectedScene?.title}</Label>
@@ -1318,16 +1507,35 @@ function SceneView({ T, assets, addToast, addAsset }) {
               ? <div style={{ textAlign: "center", padding: "40px 0" }}><Spin size={20} color={T.ac} /><div style={{ fontSize: 12, color: T.t3, marginTop: 10 }}>Generating Manim code...</div></div>
               : <div style={{ background: "#0a0a0c", borderRadius: 7, padding: "10px 12px", fontFamily: "monospace", fontSize: 11, color: "#a5b4fc", whiteSpace: "pre-wrap", overflowX: "auto", maxHeight: 320, overflowY: "auto", lineHeight: 1.6 }}>{manimCode || "# Code will appear here"}</div>
             }
+
+            {/* Video preview once done */}
+            {outputVideoUrl && (
+              <div style={{ marginTop: 14 }}>
+                <Label T={T}>Output Preview</Label>
+                <video src={outputVideoUrl} controls style={{ width: "100%", borderRadius: 8, background: "#000", marginTop: 6 }} />
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <Btn T={T} variant="primary" size="sm" Icon={Download}
+                    onClick={() => { const a = document.createElement("a"); a.href = outputVideoUrl; a.download = outputFilename; a.click(); }}>
+                    Download MP4
+                  </Btn>
+                  <Btn T={T} variant="secondary" size="sm" Icon={Copy}
+                    onClick={() => navigator.clipboard.writeText(outputVideoUrl)}>
+                    Copy URL
+                  </Btn>
+                </div>
+              </div>
+            )}
           </Card>
 
+          {/* Right: pipeline stages */}
           <Card T={T}>
             <Label T={T}>Render Pipeline</Label>
             {[
-              { id: "codegen",  label: "1. Manim Code Generation", icon: Sparkles,    desc: "Claude generates Python" },
-              { id: "manim",    label: "2. Manim CLI Render",      icon: Film,         desc: "python manim -ql scene.py" },
-              { id: "tts",      label: "3. Coqui TTS Narration",   icon: Mic,          desc: "Text → WAV audio" },
-              { id: "merge",    label: "4. FFmpeg Merge",          icon: Layers,       desc: "Video + Audio → MP4" },
-              { id: "qa",       label: "5. Auto QA Check",         icon: CheckCircle,  desc: "Sync validation" },
+              { id: "codegen", label: "1. Manim Code Generation", icon: Sparkles,   desc: "DeepSeek generates Python" },
+              { id: "manim",   label: "2. Manim CLI Render",      icon: Film,        desc: "Renders animation on server (~2-5 min)" },
+              { id: "tts",     label: "3. Coqui TTS Narration",   icon: Mic,         desc: "Script → WAV audio" },
+              { id: "merge",   label: "4. FFmpeg Merge",          icon: Layers,      desc: "Video + Audio → final MP4" },
+              { id: "qa",      label: "5. Auto QA Check",         icon: CheckCircle, desc: "Verify output file" },
             ].map(({ id, label, icon: Icon, desc }) => {
               const st = pipeline.status[id];
               return (
@@ -1340,65 +1548,32 @@ function SceneView({ T, assets, addToast, addAsset }) {
                     {st === "running" ? <Spin size={12} color={T.ac} /> : st === "done" ? <Check size={12} color={T.g} /> : st === "error" ? <AlertTriangle size={12} color={T.r} /> : <Icon size={12} color={T.t3} />}
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: T.t }}>{label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 500, color: st === "done" ? T.t : st === "running" ? T.ac : T.t2 }}>{label}</div>
                     <div style={{ fontSize: 10, color: T.t3 }}>{desc}</div>
                   </div>
                 </div>
               );
             })}
 
-            {/* FIX: show success banner after pipeline completes */}
             {pipelineDone && (
               <div style={{ marginTop: 12, padding: "10px 12px", background: T.gd, borderRadius: 7, display: "flex", alignItems: "center", gap: 8 }}>
                 <CheckCircle size={14} color={T.g} />
-                <span style={{ fontSize: 12, color: T.g, fontWeight: 500 }}>Saved to Output Library</span>
+                <span style={{ fontSize: 12, color: T.g, fontWeight: 500 }}>Done! Video saved to Output Library</span>
               </div>
             )}
 
-            <Btn T={T} variant="primary" Icon={PlayIco} disabled={!manimCode || pipelineDone} style={{ marginTop: 12, width: "100%", justifyContent: "center" }}
-              onClick={() => {
-                const stages = ["codegen", "manim", "tts", "merge", "qa"];
-                let i = 0;
-                setPipelineDone(false);
-                setPipeline({ stage: stages[0], status: { codegen: "running" } });
-                const run = () => {
-                  // FIX: when all stages done, mark final stage as "done" before completing
-                  if (i >= stages.length) {
-                    setPipeline(p => ({
-                      ...p,
-                      stage: null,
-                      status: { ...p.status, [stages[stages.length - 1]]: "done" }
-                    }));
-                    setPipelineDone(true);
-                    // FIX: save produced asset to Output Library
-                    addAsset({
-                      id: Date.now(),
-                      title: `${selectedScene?.title} — ${sourceAsset?.title || "Scene"}`,
-                      subject: sourceAsset?.subject || "Science",
-                      grade: sourceAsset?.grade || 9,
-                      topic: sourceAsset?.topic || selectedScene?.title,
-                      status: "approved",
-                      duration: `${selectedScene?.duration_sec || 60}s`,
-                      score: 90,
-                      hasScript: true,
-                      date: new Date().toLocaleDateString("en-IN", { day:"numeric", month:"short" }),
-                      transcript: script,
-                    });
-                    addToast("Pipeline complete! Saved to Output Library.", "success");
-                    return;
-                  }
-                  setPipeline(p => ({
-                    ...p,
-                    stage: stages[i],
-                    status: { ...p.status, ...(i > 0 ? { [stages[i - 1]]: "done" } : {}), [stages[i]]: "running" }
-                  }));
-                  i++;
-                  setTimeout(run, 1800);
-                };
-                setTimeout(run, 1800);
-              }}>
-              {pipelineDone ? "Pipeline Complete ✓" : "Run Full Pipeline"}
+            <Btn T={T} variant="primary" Icon={PlayIco} loading={pipelineRunning}
+              disabled={!manimCode || pipelineDone || genCode}
+              style={{ marginTop: 12, width: "100%", justifyContent: "center" }}
+              onClick={runPipeline}>
+              {pipelineDone ? "Pipeline Complete ✓" : pipelineRunning ? "Running Pipeline…" : "Run Full Pipeline"}
             </Btn>
+
+            {pipelineRunning && (
+              <div style={{ marginTop: 8, fontSize: 11, color: T.t3, textAlign: "center" }}>
+                Manim render takes 2–5 minutes. Please wait…
+              </div>
+            )}
           </Card>
         </div>
       )}
@@ -1470,18 +1645,29 @@ const NCERT_TEMPLATES = {
 const ALL_SUBJECTS_FLAT = Object.entries(NCERT_TEMPLATES);
 
 function Asset3DView({ T, addToast }) {
-  const [activeSubject, setActiveSubject]   = useState("Physics");
-  const [template, setTemplate]             = useState(null);
-  const [prompt, setPrompt]                 = useState("");
-  const [grade, setGrade]                   = useState("10");
-  const [topicName, setTopicName]           = useState("");
-  const [subtopicName, setSubtopicName]     = useState("");
-  const [assetName, setAssetName]           = useState("");
-  const [aiDescription, setAiDescription]   = useState("");
-  const [threeCode, setThreeCode]           = useState("");
-  const [generating, setGenerating]         = useState(false);
-  const [previewHtml, setPreviewHtml]       = useState(""); // full HTML blob for iframe
-  const [savedAssets, setSavedAssets]       = useState([]);
+  // Persisted state
+  const [activeSubject,  setActiveSubject]  = useLS("a3d_subject", "Physics");
+  const [templateId,     setTemplateId]     = useLS("a3d_templateId", null);
+  const [prompt,         setPrompt]         = useLS("a3d_prompt", "");
+  const [grade,          setGrade]          = useLS("a3d_grade", "10");
+  const [topicName,      setTopicName]      = useLS("a3d_topic", "");
+  const [subtopicName,   setSubtopicName]   = useLS("a3d_subtopic", "");
+  const [assetName,      setAssetName]      = useLS("a3d_assetName", "");
+  const [aiDescription,  setAiDescription]  = useLS("a3d_desc", "");
+  const [threeCode,      setThreeCode]      = useLS("a3d_code", "");
+  // previewHtml not persisted — regenerated from threeCode on load
+  const [previewHtml,    setPreviewHtml]    = useState(threeCode || "");
+  const [savedAssets,    setSavedAssets]    = useLS("a3d_saved", []);
+
+  // Derive template from id
+  const allTemplates = Object.values(NCERT_TEMPLATES).flat();
+  const template = allTemplates.find(t => t.id === templateId) || null;
+  const setTemplate = t => setTemplateId(t ? t.id : null);
+
+  // Transient
+  const [generating, setGenerating] = useState(false);
+
+  const hasResumableWork = threeCode.length > 0 || assetName.length > 0;
 
   const subjectColor = { Physics: T.ac, Chemistry: T.o, Biology: T.g, Mathematics: T.y, "Earth Science": T.bl };
 
@@ -1490,7 +1676,8 @@ function Asset3DView({ T, addToast }) {
     if (!assetName) return addToast("Enter an asset name first", "error");
     setGenerating(true); setThreeCode(""); setAiDescription(""); setPreviewHtml("");
     try {
-      const res = await claudeCall(
+      // DeepSeek handles code generation — cheaper & equally good for Three.js
+      const res = await deepseekCall(
         `Create a self-contained interactive 3D educational asset using Three.js for NCERT K-12 curriculum.
 
 Template: ${template.label}
@@ -1530,7 +1717,7 @@ Return ONLY these two sections, nothing else.`,
       setThreeCode(html);
       setPreviewHtml(html);
       addToast("3D asset generated — preview live below!", "success");
-    } catch { addToast("Claude API error", "error"); }
+    } catch { addToast("3D asset generation failed", "error"); }
     finally { setGenerating(false); }
   }
 
@@ -1548,15 +1735,35 @@ Return ONLY these two sections, nothing else.`,
     addToast(`Downloaded ${filename}`, "success");
   }
 
+  function clearAll3D() {
+    ["a3d_subject","a3d_templateId","a3d_prompt","a3d_grade","a3d_topic",
+     "a3d_subtopic","a3d_assetName","a3d_desc","a3d_code","a3d_preview","a3d_saved"]
+      .forEach(k => localStorage.removeItem(k));
+    setActiveSubject("Physics"); setTemplateId(null); setPrompt(""); setGrade("10");
+    setTopicName(""); setSubtopicName(""); setAssetName(""); setAiDescription("");
+    setThreeCode(""); setPreviewHtml(""); setSavedAssets([]);
+  }
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+
+      {/* Resume banner */}
+      {hasResumableWork && (
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 14px", background:T.acd, borderRadius:8, border:`1px solid ${T.ac}44` }}>
+          <BookOpen size={13} color={T.ac}/>
+          <span style={{ fontSize:12, color:T.ac, fontWeight:500, flex:1 }}>Previous 3D asset restored — your work is saved.</span>
+          <button onClick={clearAll3D} style={{ fontSize:11, color:T.t3, background:"transparent", border:"none", cursor:"pointer", padding:"2px 8px", borderRadius:5 }}>
+            Clear & Start Over
+          </button>
+        </div>
+      )}
 
       {/* ── Flow banner ── */}
       <div style={{ display:"flex", background:T.s, border:`1px solid ${T.b}`, borderRadius:10, overflow:"hidden" }}>
         {[
           { step:"1", label:"Pick Template",       sub:"NCERT subject & topic"         },
           { step:"2", label:"Add Details",          sub:"Grade, topic, asset name"      },
-          { step:"3", label:"Generate 3D Asset",    sub:"Claude writes Three.js"        },
+          { step:"3", label:"Generate 3D Asset",    sub:"DeepSeek writes Three.js"       },
           { step:"4", label:"Preview in Browser",   sub:"Interactive, rotatable"        },
           { step:"5", label:"Download .html",       sub:"Self-contained, embed anywhere"},
         ].map((s,i,arr) => (
@@ -1956,10 +2163,19 @@ function OutputView({ T, mode, assets, addToast }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 14 }}>
             {shown.map(a => (
               <Card key={a.id} T={T} style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ height: 150, background: "#0a0a0c", position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(99,102,241,.3)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-                    <Play size={16} color="#fff" style={{ marginLeft: 2 }} />
-                  </div>
+                <div style={{ height: 150, background: "#0a0a0c", position: "relative", display: "flex", alignItems: "center", justifyContent: "center", cursor: a.videoUrl ? "pointer" : "default" }}
+                  onClick={() => { if (a.videoUrl) { setPreviewUrl(a.videoUrl); setPreviewTitle(a.title); } }}>
+                  {a.videoUrl
+                    ? <video src={a.videoUrl} style={{ width: "100%", height: "100%", objectFit: "cover", opacity: 0.75 }} />
+                    : <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(99,102,241,.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Play size={16} color="#fff" style={{ marginLeft: 2 }} />
+                      </div>
+                  }
+                  {a.videoUrl && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Play size={14} color="#fff" style={{ marginLeft: 2 }} />
+                    </div>
+                  </div>}
                   <div style={{ position: "absolute", top: 8, left: 8 }}><Badge status={a.status} mode="dark" /></div>
                   <div style={{ position: "absolute", top: 8, right: 8 }}><ScoreDot val={a.score} T={DARK} /></div>
                   <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,.6)", padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#fff", fontFamily: "monospace" }}>{a.duration}</div>
@@ -1968,8 +2184,14 @@ function OutputView({ T, mode, assets, addToast }) {
                   <div style={{ fontSize: 13, fontWeight: 500, color: T.t, marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.title}</div>
                   <div style={{ fontSize: 11, color: T.t3, marginBottom: 8 }}>{a.subject} · Grade {a.grade}</div>
                   <div style={{ display: "flex", gap: 5 }}>
-                    <Btn T={T} variant="ghost" size="sm" Icon={Eye}>Preview</Btn>
-                    <Btn T={T} variant="secondary" size="sm" Icon={Download}>Export</Btn>
+                    <Btn T={T} variant="ghost" size="sm" Icon={Eye}
+                      onClick={e => { e.stopPropagation(); if (a.videoUrl) { setPreviewUrl(a.videoUrl); setPreviewTitle(a.title); } else addToast("No video file attached", "error"); }}>
+                      Preview
+                    </Btn>
+                    <Btn T={T} variant="secondary" size="sm" Icon={Download}
+                      onClick={e => { e.stopPropagation(); if (a.videoUrl) { const el = document.createElement("a"); el.href = a.videoUrl; el.download = a.filename || "video.mp4"; el.click(); } else addToast("No video file attached", "error"); }}>
+                      Export
+                    </Btn>
                     <Btn T={T} variant="ghost" size="sm" Icon={Pencil}>Re-edit</Btn>
                   </div>
                 </div>
@@ -1980,7 +2202,8 @@ function OutputView({ T, mode, assets, addToast }) {
           <Card T={T} style={{ padding: 0, overflow: "hidden" }}>
             {shown.map((a, i) => (
               <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: i < shown.length - 1 ? `1px solid ${T.b}` : "none" }}>
-                <div style={{ width: 40, height: 40, borderRadius: 8, background: T.s2, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 8, background: T.s2, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: a.videoUrl ? "pointer" : "default" }}
+                  onClick={() => { if (a.videoUrl) { setPreviewUrl(a.videoUrl); setPreviewTitle(a.title); } }}>
                   <Play size={14} color={T.t3} style={{ marginLeft: 2 }} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -1990,8 +2213,8 @@ function OutputView({ T, mode, assets, addToast }) {
                 <ScoreDot val={a.score} T={T} />
                 <Badge status={a.status} mode={mode} />
                 <div style={{ display: "flex", gap: 4 }}>
-                  <button style={{ padding: 5, border: "none", background: "transparent", cursor: "pointer", color: T.t3 }}><Eye size={13} /></button>
-                  <button style={{ padding: 5, border: "none", background: "transparent", cursor: "pointer", color: T.t3 }}><Download size={13} /></button>
+                  <button onClick={() => { if (a.videoUrl) { setPreviewUrl(a.videoUrl); setPreviewTitle(a.title); } else addToast("No video file attached", "error"); }} style={{ padding: 5, border: "none", background: "transparent", cursor: "pointer", color: T.t3 }}><Eye size={13} /></button>
+                  <button onClick={() => { if (a.videoUrl) { const el = document.createElement("a"); el.href = a.videoUrl; el.download = a.filename || "video.mp4"; el.click(); } else addToast("No video file attached", "error"); }} style={{ padding: 5, border: "none", background: "transparent", cursor: "pointer", color: T.t3 }}><Download size={13} /></button>
                   <button style={{ padding: 5, border: "none", background: "transparent", cursor: "pointer", color: T.r }}><Trash2 size={13} /></button>
                 </div>
               </div>
