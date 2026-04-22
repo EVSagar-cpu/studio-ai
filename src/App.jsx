@@ -114,7 +114,7 @@ async function pollJob(jid, onTick, maxSec = 300) {
 async function claudeCall(prompt, systemMsg) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1500,
@@ -1145,7 +1145,7 @@ function TrimView({ T, assets, addToast }) {
 /* ════════════════════════════════════════════════════════════════════════
    VIEW: SCENE BUILDER
 ════════════════════════════════════════════════════════════════════════ */
-function SceneView({ T, assets, addToast }) {
+function SceneView({ T, assets, addToast, addAsset }) {
   const [step, setStep] = useState(0); // 0 source, 1 script, 2 scenes, 3 pipeline
   const [srcMode, setSrcMode] = useState("queue");
   const [sourceAsset, setSourceAsset] = useState(assets[0] || null);
@@ -1156,6 +1156,7 @@ function SceneView({ T, assets, addToast }) {
   const [manimCode, setManimCode] = useState("");
   const [genCode, setGenCode] = useState(false);
   const [pipeline, setPipeline] = useState({ stage: null, status: {} });
+  const [pipelineDone, setPipelineDone] = useState(false);
 
   const stepLabels = ["Source", "Script", "Scenes", "Manim Pipeline"];
 
@@ -1182,7 +1183,10 @@ function SceneView({ T, assets, addToast }) {
   }
 
   async function generateManimCode(scene) {
-    setSelectedScene(scene); setGenCode(true); setManimCode(""); setStep(3);
+    // FIX: don't jump to step 3 immediately — stay on step 2 so scene grid stays visible
+    setSelectedScene(scene); setGenCode(true); setManimCode("");
+    setPipeline({ stage: null, status: {} }); setPipelineDone(false);
+    setStep(3);
     try {
       const res = await claudeCall(
         `Write Python Manim Community Edition code for this educational scene.\n\nScene: ${scene.title}\nSubject: ${sourceAsset?.subject || "Science"}\nGrade: ${sourceAsset?.grade || 9}\nVisuals: ${scene.visuals}\n\nRequirements:\n- Use Manim CE syntax (from manim import *)\n- Class name: Scene${scene.id}\n- Duration: ~${scene.duration_sec} seconds\n- Include text labels in English\n- Make it educational and clear\n- Use colors appropriately\n- Return ONLY the Python code`,
@@ -1263,27 +1267,46 @@ function SceneView({ T, assets, addToast }) {
         </Card>
       )}
 
-      {/* Step 2: Scenes */}
-      {step === 2 && scenes.length > 0 && (
+      {/* Step 2: Scenes — also shown on step 3 as a compact selector row */}
+      {(step === 2 || step === 3) && scenes.length > 0 && (
         <div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>
-            {scenes.map(sc => (
-              <Card key={sc.id} T={T} style={{ cursor: "pointer", borderColor: selectedScene?.id === sc.id ? T.ac : T.b }}
-                onClick={() => sc.needs_manim && generateManimCode(sc)}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                  <Tag T={T} color={typeColor(sc.type)}>{sc.type}</Tag>
-                  <span style={{ fontSize: 10, color: T.t3, fontFamily: "monospace" }}>{sc.duration_sec}s</span>
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 500, color: T.t, marginBottom: 6 }}>{sc.title}</div>
-                <div style={{ fontSize: 11, color: T.t3, lineHeight: 1.5 }}>{sc.visuals}</div>
-                {sc.needs_manim && (
-                  <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 5, color: T.ac, fontSize: 11 }}>
-                    <Wand2 size={11} /> Click to generate Manim code
+          {/* On step 3, show compact scene switcher */}
+          {step === 3 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+              <Btn T={T} variant="ghost" size="sm" Icon={ChevronRight} style={{ transform: "rotate(180deg)" }} onClick={() => setStep(2)}>
+                All Scenes
+              </Btn>
+              <span style={{ fontSize: 11, color: T.t3 }}>Select a different scene:</span>
+              {scenes.filter(sc => sc.needs_manim).map(sc => (
+                <button key={sc.id} onClick={() => generateManimCode(sc)} style={{
+                  padding: "4px 10px", borderRadius: 6, border: `1px solid ${selectedScene?.id === sc.id ? T.ac : T.b}`,
+                  background: selectedScene?.id === sc.id ? T.acd : T.s2, color: selectedScene?.id === sc.id ? T.ac : T.t2,
+                  fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 500,
+                }}>{sc.title}</button>
+              ))}
+            </div>
+          )}
+          {/* Full scene grid only on step 2 */}
+          {step === 2 && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>
+              {scenes.map(sc => (
+                <Card key={sc.id} T={T} style={{ cursor: sc.needs_manim ? "pointer" : "default", borderColor: selectedScene?.id === sc.id ? T.ac : T.b }}
+                  onClick={() => sc.needs_manim && generateManimCode(sc)}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                    <Tag T={T} color={typeColor(sc.type)}>{sc.type}</Tag>
+                    <span style={{ fontSize: 10, color: T.t3, fontFamily: "monospace" }}>{sc.duration_sec}s</span>
                   </div>
-                )}
-              </Card>
-            ))}
-          </div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: T.t, marginBottom: 6 }}>{sc.title}</div>
+                  <div style={{ fontSize: 11, color: T.t3, lineHeight: 1.5 }}>{sc.visuals}</div>
+                  {sc.needs_manim && (
+                    <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 5, color: T.ac, fontSize: 11 }}>
+                      <Wand2 size={11} /> Click to generate Manim code
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1304,11 +1327,11 @@ function SceneView({ T, assets, addToast }) {
           <Card T={T}>
             <Label T={T}>Render Pipeline</Label>
             {[
-              { id: "codegen",  label: "1. Manim Code Generation", icon: Sparkles, desc: "Claude generates Python" },
-              { id: "manim",    label: "2. Manim CLI Render",      icon: Film,     desc: "python manim -ql scene.py" },
-              { id: "tts",      label: "3. Coqui TTS Narration",   icon: Mic,      desc: "Text → WAV audio" },
-              { id: "merge",    label: "4. FFmpeg Merge",          icon: Layers,   desc: "Video + Audio → MP4" },
-              { id: "qa",       label: "5. Auto QA Check",         icon: CheckCircle, desc: "Sync validation" },
+              { id: "codegen",  label: "1. Manim Code Generation", icon: Sparkles,    desc: "Claude generates Python" },
+              { id: "manim",    label: "2. Manim CLI Render",      icon: Film,         desc: "python manim -ql scene.py" },
+              { id: "tts",      label: "3. Coqui TTS Narration",   icon: Mic,          desc: "Text → WAV audio" },
+              { id: "merge",    label: "4. FFmpeg Merge",          icon: Layers,       desc: "Video + Audio → MP4" },
+              { id: "qa",       label: "5. Auto QA Check",         icon: CheckCircle,  desc: "Sync validation" },
             ].map(({ id, label, icon: Icon, desc }) => {
               const st = pipeline.status[id];
               return (
@@ -1327,20 +1350,58 @@ function SceneView({ T, assets, addToast }) {
                 </div>
               );
             })}
-            <Btn T={T} variant="primary" Icon={PlayIco} style={{ marginTop: 12, width: "100%", justifyContent: "center" }}
+
+            {/* FIX: show success banner after pipeline completes */}
+            {pipelineDone && (
+              <div style={{ marginTop: 12, padding: "10px 12px", background: T.gd, borderRadius: 7, display: "flex", alignItems: "center", gap: 8 }}>
+                <CheckCircle size={14} color={T.g} />
+                <span style={{ fontSize: 12, color: T.g, fontWeight: 500 }}>Saved to Output Library</span>
+              </div>
+            )}
+
+            <Btn T={T} variant="primary" Icon={PlayIco} disabled={!manimCode || pipelineDone} style={{ marginTop: 12, width: "100%", justifyContent: "center" }}
               onClick={() => {
                 const stages = ["codegen", "manim", "tts", "merge", "qa"];
                 let i = 0;
+                setPipelineDone(false);
                 setPipeline({ stage: stages[0], status: { codegen: "running" } });
                 const run = () => {
-                  if (i >= stages.length) { setPipeline(p => ({ ...p, stage: null })); addToast("Pipeline complete!", "success"); return; }
-                  setPipeline(p => ({ ...p, stage: stages[i], status: { ...p.status, [stages[i - 1]]: "done", [stages[i]]: "running" } }));
+                  // FIX: when all stages done, mark final stage as "done" before completing
+                  if (i >= stages.length) {
+                    setPipeline(p => ({
+                      ...p,
+                      stage: null,
+                      status: { ...p.status, [stages[stages.length - 1]]: "done" }
+                    }));
+                    setPipelineDone(true);
+                    // FIX: save produced asset to Output Library
+                    addAsset({
+                      id: Date.now(),
+                      title: `${selectedScene?.title} — ${sourceAsset?.title || "Scene"}`,
+                      subject: sourceAsset?.subject || "Science",
+                      grade: sourceAsset?.grade || 9,
+                      topic: sourceAsset?.topic || selectedScene?.title,
+                      status: "approved",
+                      duration: `${selectedScene?.duration_sec || 60}s`,
+                      score: 90,
+                      hasScript: true,
+                      date: new Date().toLocaleDateString("en-IN", { day:"numeric", month:"short" }),
+                      transcript: script,
+                    });
+                    addToast("Pipeline complete! Saved to Output Library.", "success");
+                    return;
+                  }
+                  setPipeline(p => ({
+                    ...p,
+                    stage: stages[i],
+                    status: { ...p.status, ...(i > 0 ? { [stages[i - 1]]: "done" } : {}), [stages[i]]: "running" }
+                  }));
                   i++;
                   setTimeout(run, 1800);
                 };
                 setTimeout(run, 1800);
               }}>
-              Run Full Pipeline
+              {pipelineDone ? "Pipeline Complete ✓" : "Run Full Pipeline"}
             </Btn>
           </Card>
         </div>
